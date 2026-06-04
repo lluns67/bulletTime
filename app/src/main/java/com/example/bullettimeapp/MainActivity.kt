@@ -26,6 +26,13 @@ import java.io.File
 import android.content.ContentValues
 import android.provider.MediaStore
 import android.os.Build
+import androidx.compose.foundation.layout.Column
+
+import android.util.Log
+import kotlinx.coroutines.*
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.layout.*
+import androidx.compose.ui.unit.dp
 class MainActivity : ComponentActivity() {
 
 override fun onCreate(savedInstanceState: Bundle?) {
@@ -33,29 +40,170 @@ override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
 
     // 권한 요청
-    if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-        != PackageManager.PERMISSION_GRANTED ||
-        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-        != PackageManager.PERMISSION_GRANTED) {
+    val permissions = mutableListOf(
+        Manifest.permission.CAMERA,
+        Manifest.permission.RECORD_AUDIO,
+        Manifest.permission.ACCESS_FINE_LOCATION
+    )
 
-        ActivityCompat.requestPermissions(
-            this,
-            arrayOf(
-                Manifest.permission.CAMERA,
-                Manifest.permission.RECORD_AUDIO
-            ),
-            100
-        )
+    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S) {
+        permissions.add(Manifest.permission.BLUETOOTH_SCAN)
+        permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
+        permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
+
     }
 
-    setContent {
-        var showCamera by remember { mutableStateOf(false) }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
 
-        if (showCamera) {
-            CameraScreen()
-        } else {
-            Button(onClick = { showCamera = true }) {
-                Text("카메라 시작")
+    ActivityCompat.requestPermissions(
+        this,
+        permissions.toTypedArray(),
+        100
+    )
+
+    setContent {
+
+        val context = LocalContext.current
+
+        var remoteStartRecording by remember {
+            mutableStateOf(false)
+        }
+
+        var remoteStopRecording by remember {
+            mutableStateOf(false)
+        }
+
+
+
+        val nearbyManager = remember {
+            NearbyManager(context) { message ->
+
+                when {
+
+                    message.startsWith("START_AT:") -> {
+
+                        val targetTime =
+                            message.removePrefix("START_AT:")
+                                .toLong()
+
+                        CoroutineScope(Dispatchers.Default).launch {
+
+                            val waitTime =
+                                targetTime - System.currentTimeMillis()
+
+                            if (waitTime > 0)
+                                delay(waitTime)
+
+                            withContext(Dispatchers.Main) {
+                                remoteStartRecording = true
+                            }
+                        }
+                    }
+
+                    message.startsWith("STOP_AT:") -> {
+
+                        val targetTime =
+                            message.removePrefix("STOP_AT:")
+                                .toLong()
+
+                        CoroutineScope(Dispatchers.Default).launch {
+
+                            val waitTime =
+                                targetTime - System.currentTimeMillis()
+
+                            if (waitTime > 0)
+                                delay(waitTime)
+
+                            withContext(Dispatchers.Main) {
+                                remoteStopRecording = true
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
+
+            CameraScreen(
+                remoteStartRecording = remoteStartRecording,
+                remoteStopRecording = remoteStopRecording,
+                onRemoteStartConsumed = {
+                    remoteStartRecording = false
+                },
+                onRemoteStopConsumed = {
+                    remoteStopRecording = false
+                }
+            )
+
+            Button(
+                onClick = {
+                    nearbyManager.startAdvertising()
+                }
+            ) {
+                Text("마스터 시작")
+            }
+
+            Button(
+                onClick = {
+                    nearbyManager.startDiscovery()
+                }
+            ) {
+                Text("클라이언트 시작")
+            }
+
+            Button(
+                onClick = {
+
+                    val startTime =
+                        System.currentTimeMillis() + 5000
+
+                    nearbyManager.sendStartCommand(startTime)
+
+                    CoroutineScope(Dispatchers.Default).launch {
+
+                        val waitTime =
+                            startTime - System.currentTimeMillis()
+
+                        if (waitTime > 0)
+                            delay(waitTime)
+
+                        withContext(Dispatchers.Main) {
+                            remoteStartRecording = true
+                        }
+                    }
+                }
+            ) {
+                Text("START 전송")
+            }
+
+            Button(
+                onClick = {
+
+                    val stopTime =
+                        System.currentTimeMillis() + 5000
+
+                    nearbyManager.sendStopCommand(stopTime)
+
+                    CoroutineScope(Dispatchers.Default).launch {
+
+                        val waitTime =
+                            stopTime - System.currentTimeMillis()
+
+                        if (waitTime > 0)
+                            delay(waitTime)
+
+                        withContext(Dispatchers.Main) {
+                            remoteStopRecording = true
+                        }
+                    }
+                }
+            ) {
+                Text("STOP 전송")
             }
         }
     }
@@ -63,18 +211,27 @@ override fun onCreate(savedInstanceState: Bundle?) {
 }
 
 @Composable
-fun CameraScreen() {
+fun CameraScreen(
+    remoteStartRecording: Boolean,
+    remoteStopRecording: Boolean,
+    onRemoteStartConsumed: () -> Unit,
+    onRemoteStopConsumed: () -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    val previewView = androidx.camera.view.PreviewView(context)
+    val previewView = remember {
+        androidx.camera.view.PreviewView(context)
+    }
 
-    var videoCapture: VideoCapture<Recorder>? = null
+    var videoCapture by remember {
+        mutableStateOf<VideoCapture<Recorder>?>(null)
+    }
 
 
     AndroidView(
         factory = { previewView },
-        modifier = Modifier.fillMaxSize()
+        modifier = Modifier.height(400.dp)
     ) {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
 
@@ -99,57 +256,92 @@ fun CameraScreen() {
             )
 
         }, ContextCompat.getMainExecutor(context))
+
     }
 
     // 🎥 녹화 버튼
     var isRecording by remember { mutableStateOf(false) }
     var recording: Recording? by remember { mutableStateOf(null) }
 
-    Button(
-        onClick = {
-            if (!isRecording) {
-                val name = "video_${System.currentTimeMillis()}.mp4"
+    fun startRecording() {
 
-                val contentValues = ContentValues().apply {
-                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                    put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, "Movies/BulletTimeApp")
-                    }
-                }
 
-                val outputOptions = MediaStoreOutputOptions
-                    .Builder(
-                        context.contentResolver,
-                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                    )
-                    .setContentValues(contentValues)
-                    .build()
+        Log.d(
+            "Camera",
+            "startRecording videoCapture=$videoCapture"
+        )
 
-                val hasAudioPermission = ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.RECORD_AUDIO
-                ) == PackageManager.PERMISSION_GRANTED
+        if (videoCapture == null) {
+            Log.e("Camera", "videoCapture null")
+            return
+        }
 
-                val recordingBuilder = videoCapture?.output
-                    ?.prepareRecording(context, outputOptions)
 
-                if (hasAudioPermission) {
-                    recordingBuilder?.withAudioEnabled()
-                }
+        if (isRecording) return
 
-                recording = recordingBuilder
-                    ?.start(ContextCompat.getMainExecutor(context)) {}
+        val name = "video_${System.currentTimeMillis()}.mp4"
 
-                isRecording = true
-
-            } else {
-                recording?.stop()
-                recording = null
-                isRecording = false
+        val contentValues = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Movies/BulletTimeApp")
             }
         }
-    ) {
-        Text(if (isRecording) "녹화 중지" else "녹화 시작")
+
+        val outputOptions = MediaStoreOutputOptions
+            .Builder(
+                context.contentResolver,
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            )
+            .setContentValues(contentValues)
+            .build()
+
+        val recordingBuilder =
+            videoCapture?.output?.prepareRecording(context, outputOptions)
+
+        recording = recordingBuilder
+            ?.start(ContextCompat.getMainExecutor(context)) {}
+
+        isRecording = true
     }
+
+    LaunchedEffect(remoteStartRecording) {
+
+        if (remoteStartRecording) {
+
+            Log.d(
+                "Camera",
+                "원격 녹화 시작"
+            )
+
+            startRecording()
+
+            onRemoteStartConsumed()
+        }
+    }
+    fun stopRecording() {
+        recording?.stop()
+        recording = null
+        isRecording = false
+    }
+    LaunchedEffect(remoteStopRecording) {
+
+        if (remoteStopRecording) {
+
+            Log.d(
+                "Camera",
+                "원격 녹화 중지"
+            )
+
+            stopRecording()
+
+            onRemoteStopConsumed()
+        }
+    }
+
+
+
+
+
 }
