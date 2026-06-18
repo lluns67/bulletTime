@@ -5,14 +5,23 @@ import com.google.android.gms.nearby.Nearby
 import com.google.android.gms.nearby.connection.*
 
 import android.util.Log
+import java.io.File
+import android.net.Uri
+import java.io.FileInputStream
 
 class NearbyManager(
-    context: Context,
+    private val context: Context,
     private val onMessageReceived: (String) -> Unit,
-) {
-    private var connectedEndpointId: String? = null
+    private val onConnectionChanged: (Int) -> Unit,
+    private val onFileReceived: (String) -> Unit
+){
+    private var connectionCount = 0
+    private val connectedEndpoints =
+        mutableSetOf<String>()
     private val connectionsClient =
         Nearby.getConnectionsClient(context)
+    private val incomingFiles =
+        mutableMapOf<Long, Payload>()
 
     companion object {
         const val SERVICE_ID =
@@ -21,35 +30,94 @@ class NearbyManager(
 
     fun sendStartCommand(startTime: Long) {
 
-        connectedEndpointId?.let { endpointId ->
+        val message = "START_AT:$startTime"
 
-            val message =
-                "START_AT:$startTime"
+        connectedEndpoints.forEach { endpointId ->
 
             connectionsClient.sendPayload(
                 endpointId,
                 Payload.fromBytes(message.toByteArray())
             )
 
-            Log.d("Nearby", "전송: $message")
+            Log.d(
+                "Nearby",
+                "START 전송 -> $endpointId"
+            )
         }
     }
 
     fun sendStopCommand(stopTime: Long) {
 
-        connectedEndpointId?.let { endpointId ->
+        val message = "STOP_AT:$stopTime"
 
-            val message =
-                "STOP_AT:$stopTime"
+        connectedEndpoints.forEach { endpointId ->
 
             connectionsClient.sendPayload(
                 endpointId,
                 Payload.fromBytes(message.toByteArray())
             )
 
-            Log.d("Nearby", "전송: $message")
+            Log.d(
+                "Nearby",
+                "STOP 전송 -> $endpointId"
+            )
         }
     }
+    fun sendVideoUri(
+        context: Context,
+        uriString: String
+    ) {
+
+        try {
+
+            val uri = Uri.parse(uriString)
+
+            val inputStream =
+                context.contentResolver.openInputStream(uri)
+                    ?: return
+
+            val tempFile = File(
+                context.cacheDir,
+                "video_send.mp4"
+            )
+
+            inputStream.use { input ->
+
+                tempFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+
+            sendFile(tempFile)
+
+        } catch (e: Exception) {
+
+            Log.e(
+                "Nearby",
+                "파일 변환 실패",
+                e
+            )
+        }
+    }
+    fun sendFile(file: File) {
+
+        connectedEndpoints.forEach { endpointId ->
+
+            val payload =
+                Payload.fromFile(file)
+
+            connectionsClient.sendPayload(
+                endpointId,
+                payload
+            )
+
+            Log.d(
+                "Nearby",
+                "파일 전송 -> $endpointId"
+            )
+        }
+    }
+
 
 
 
@@ -75,9 +143,16 @@ class NearbyManager(
 
                 if (result.status.isSuccess) {
 
-                    connectedEndpointId = endpointId
+                    connectedEndpoints.add(endpointId)
 
-                    Log.d("Nearby", "연결 성공")
+                    connectionCount = connectedEndpoints.size
+
+                    onConnectionChanged(connectionCount)
+
+                    Log.d(
+                        "Nearby",
+                        "연결 성공: $endpointId"
+                    )
                 } else {
                     Log.d("Nearby", "연결 실패")
                 }
@@ -87,6 +162,20 @@ class NearbyManager(
                 endpointId: String
             ) {
 
+                connectedEndpoints.remove(endpointId)
+
+                connectionCount = connectedEndpoints.size
+
+                onConnectionChanged(connectionCount)
+
+                Log.d(
+                    "Nearby",
+                    "연결 해제: $endpointId"
+                )
+
+                onConnectionChanged(connectionCount)
+
+                Log.d("Nearby", "연결 해제")
             }
         }
 
@@ -182,12 +271,91 @@ class NearbyManager(
 
                     onMessageReceived(message)
                 }
+                payload.asFile()?.let {
+
+                    incomingFiles[payload.id] = payload
+
+                    Log.d(
+                        "Nearby",
+                        "파일 Payload 수신: ${payload.id}"
+                    )
+                }
             }
 
             override fun onPayloadTransferUpdate(
                 endpointId: String,
                 update: PayloadTransferUpdate
             ) {
+
+                Log.d(
+                    "Nearby",
+                    "전송상태 id=${update.payloadId} status=${update.status} bytes=${update.bytesTransferred}/${update.totalBytes}"
+                )
+
+                if (
+                    update.status ==
+                    PayloadTransferUpdate.Status.SUCCESS
+                ) {
+
+                    Log.d(
+                        "Nearby",
+                        "SUCCESS 도착"
+                    )
+
+                    val payload =
+                        incomingFiles.remove(update.payloadId)
+
+                    Log.d(
+                        "Nearby",
+                        "payload=$payload"
+                    )
+
+                    if (payload == null) {
+                        Log.e(
+                            "Nearby",
+                            "payload 없음"
+                        )
+                        return
+                    }
+
+                    val pfd =
+                        payload.asFile()?.asParcelFileDescriptor()
+
+                    Log.d(
+                        "Nearby",
+                        "pfd=$pfd"
+                    )
+
+                    if (pfd == null) {
+                        Log.e(
+                            "Nearby",
+                            "ParcelFileDescriptor 없음"
+                        )
+                        return
+                    }
+
+                    val file =
+                        File(
+                            context.getExternalFilesDir(null),
+                            "received_${System.currentTimeMillis()}.mp4"
+                        )
+
+                    FileInputStream(
+                        pfd.fileDescriptor
+                    ).use { input ->
+
+                        file.outputStream().use { output ->
+                            input.copyTo(output)
+                        }
+                    }
+
+                    Log.d(
+                        "Nearby",
+                        "파일 저장 완료: ${file.absolutePath}"
+                    )
+
+                    onFileReceived(file.absolutePath)
+                }
             }
         }
 

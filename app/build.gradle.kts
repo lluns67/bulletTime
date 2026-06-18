@@ -40,7 +40,7 @@ android {
         compose = true
     }
 }
-val camerax_version = "1.3.1"
+val cameraXVersion = "1.6.1"
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -61,12 +61,12 @@ dependencies {
 
 
 
-    implementation("androidx.camera:camera-core:$camerax_version")
-    implementation("androidx.camera:camera-camera2:$camerax_version")
-    implementation("androidx.camera:camera-lifecycle:$camerax_version")
-    implementation("androidx.camera:camera-video:$camerax_version")
-    implementation("androidx.camera:camera-view:$camerax_version")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("androidx.camera:camera-core:$cameraXVersion")
+    implementation("androidx.camera:camera-camera2:$cameraXVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
+    implementation("androidx.camera:camera-video:$cameraXVersion")
+    implementation("androidx.camera:camera-view:$cameraXVersion")
+    implementation("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("com.google.android.gms:play-services-nearby:19.3.0")
 
 }

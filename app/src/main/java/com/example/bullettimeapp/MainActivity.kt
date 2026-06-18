@@ -33,6 +33,8 @@ import kotlinx.coroutines.*
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.layout.*
 import androidx.compose.ui.unit.dp
+
+
 class MainActivity : ComponentActivity() {
 
 override fun onCreate(savedInstanceState: Bundle?) {
@@ -75,71 +77,172 @@ override fun onCreate(savedInstanceState: Bundle?) {
             mutableStateOf(false)
         }
 
+        var isRecordingUi by remember {
+            mutableStateOf(false)
+        }
+
+        var savedFileName by remember {
+            mutableStateOf("")
+        }
+        var isRecordingMaster by remember {
+            mutableStateOf(false)
+        }
+        var connectionCount by remember {
+            mutableStateOf(0)
+        }
+        var savedVideoUri by remember {
+            mutableStateOf("")
+        }
+
+
+
 
 
         val nearbyManager = remember {
-            NearbyManager(context) { message ->
+            NearbyManager(
 
-                when {
+                context = context,
 
-                    message.startsWith("START_AT:") -> {
+                onMessageReceived = { message ->
 
-                        val targetTime =
-                            message.removePrefix("START_AT:")
-                                .toLong()
+                    Log.d("Nearby", "수신: $message")
 
-                        CoroutineScope(Dispatchers.Default).launch {
+                    when {
 
-                            val waitTime =
-                                targetTime - System.currentTimeMillis()
+                        message.startsWith("START_AT:") -> {
 
-                            if (waitTime > 0)
-                                delay(waitTime)
+                            val targetTime =
+                                message.removePrefix("START_AT:")
+                                    .toLong()
 
-                            withContext(Dispatchers.Main) {
-                                remoteStartRecording = true
+                            CoroutineScope(Dispatchers.Default).launch {
+
+                                val waitTime =
+                                    targetTime - System.currentTimeMillis()
+
+                                if (waitTime > 0) {
+                                    delay(waitTime)
+                                }
+
+                                withContext(Dispatchers.Main) {
+                                    Log.d(
+                                        "Remote",
+                                        "remoteStartRecording=true"
+                                    )
+                                    remoteStartRecording = true
+                                }
+                            }
+                        }
+
+                        message.startsWith("STOP_AT:") -> {
+
+                            val targetTime =
+                                message.removePrefix("STOP_AT:")
+                                    .toLong()
+
+                            CoroutineScope(Dispatchers.Default).launch {
+
+                                val waitTime =
+                                    targetTime - System.currentTimeMillis()
+
+                                if (waitTime > 0) {
+                                    delay(waitTime)
+                                }
+
+                                withContext(Dispatchers.Main) {
+                                    remoteStopRecording = true
+                                }
                             }
                         }
                     }
+                },
 
-                    message.startsWith("STOP_AT:") -> {
+                onConnectionChanged = { count ->
 
-                        val targetTime =
-                            message.removePrefix("STOP_AT:")
-                                .toLong()
+                    connectionCount = count
 
-                        CoroutineScope(Dispatchers.Default).launch {
+                    Log.d(
+                        "Nearby",
+                        "현재 연결 수: $count"
+                    )
+                },
+                onFileReceived = { path ->
 
-                            val waitTime =
-                                targetTime - System.currentTimeMillis()
+                    Log.d(
+                        "Nearby",
+                        "파일 도착: $path"
+                    )
 
-                            if (waitTime > 0)
-                                delay(waitTime)
-
-                            withContext(Dispatchers.Main) {
-                                remoteStopRecording = true
-                            }
-                        }
-                    }
+                    savedFileName = path
                 }
-            }
+            )
         }
 
         Column(
             modifier = Modifier.fillMaxSize()
         ) {
-
+            Text("remote=$remoteStartRecording")
             CameraScreen(
+
                 remoteStartRecording = remoteStartRecording,
                 remoteStopRecording = remoteStopRecording,
+
+                onRecordingStateChanged = {
+                    isRecordingUi = it
+                    isRecordingMaster = it
+                },
+
+                onSaved = { uri ->
+
+                    savedVideoUri = uri
+
+                    Log.d(
+                        "Camera",
+                        "저장됨: $uri"
+                    )
+                },
+
                 onRemoteStartConsumed = {
                     remoteStartRecording = false
                 },
+
                 onRemoteStopConsumed = {
                     remoteStopRecording = false
                 }
             )
+            //상태표시
+            Text(
+                when {
+                    isRecordingUi ->
+                        "🔴 녹화중..."
 
+                    savedFileName.isNotEmpty() ->
+                        "✅ 저장 완료\n$savedFileName"
+
+                    else ->
+                        "대기중"
+                }
+            )
+            Text(
+                text = "연결 수 : $connectionCount"
+            )
+            Text(
+                "연결된 기기: $connectionCount"
+            )
+            Button(
+                onClick = {
+
+                    if(savedVideoUri.isNotEmpty()) {
+
+                        nearbyManager.sendVideoUri(
+                            context,
+                            savedVideoUri
+                        )
+                    }
+                }
+            ) {
+                Text("파일 전송")
+            }
             Button(
                 onClick = {
                     nearbyManager.startAdvertising()
@@ -159,52 +262,40 @@ override fun onCreate(savedInstanceState: Bundle?) {
             Button(
                 onClick = {
 
-                    val startTime =
-                        System.currentTimeMillis() + 5000
+                    if (!isRecordingMaster) {
 
-                    nearbyManager.sendStartCommand(startTime)
+                        val startTime =
+                            System.currentTimeMillis() + 5000
 
-                    CoroutineScope(Dispatchers.Default).launch {
+                        nearbyManager.sendStartCommand(startTime)
 
-                        val waitTime =
-                            startTime - System.currentTimeMillis()
+                        remoteStartRecording = true
 
-                        if (waitTime > 0)
-                            delay(waitTime)
+                        isRecordingMaster = true
 
-                        withContext(Dispatchers.Main) {
-                            remoteStartRecording = true
-                        }
+                    } else {
+
+                        val stopTime =
+                            System.currentTimeMillis() + 3000
+
+                        nearbyManager.sendStopCommand(stopTime)
+
+                        remoteStopRecording = true
+
+                        isRecordingMaster = false
                     }
                 }
             ) {
-                Text("START 전송")
+                Text(
+                    if (isRecordingMaster)
+                        "촬영 종료"
+                    else
+                        "촬영 시작"
+                )
             }
 
-            Button(
-                onClick = {
 
-                    val stopTime =
-                        System.currentTimeMillis() + 5000
 
-                    nearbyManager.sendStopCommand(stopTime)
-
-                    CoroutineScope(Dispatchers.Default).launch {
-
-                        val waitTime =
-                            stopTime - System.currentTimeMillis()
-
-                        if (waitTime > 0)
-                            delay(waitTime)
-
-                        withContext(Dispatchers.Main) {
-                            remoteStopRecording = true
-                        }
-                    }
-                }
-            ) {
-                Text("STOP 전송")
-            }
         }
     }
 }
@@ -214,6 +305,11 @@ override fun onCreate(savedInstanceState: Bundle?) {
 fun CameraScreen(
     remoteStartRecording: Boolean,
     remoteStopRecording: Boolean,
+
+    onRecordingStateChanged: (Boolean) -> Unit,
+
+    onSaved: (String) -> Unit,
+
     onRemoteStartConsumed: () -> Unit,
     onRemoteStopConsumed: () -> Unit
 ) {
@@ -226,6 +322,10 @@ fun CameraScreen(
 
     var videoCapture by remember {
         mutableStateOf<VideoCapture<Recorder>?>(null)
+    }
+
+    var isRecordingMaster by remember {
+        mutableStateOf(false)
     }
 
 
@@ -253,6 +353,10 @@ fun CameraScreen(
                 cameraSelector,
                 preview,
                 videoCapture
+            )
+            Log.d(
+                "Camera",
+                "bind camera"
             )
 
         }, ContextCompat.getMainExecutor(context))
@@ -301,13 +405,40 @@ fun CameraScreen(
             videoCapture?.output?.prepareRecording(context, outputOptions)
 
         recording = recordingBuilder
-            ?.start(ContextCompat.getMainExecutor(context)) {}
+            ?.start(
+                ContextCompat.getMainExecutor(context)
+            ) { event ->
+
+                if (event is VideoRecordEvent.Finalize) {
+
+                    Log.d(
+                        "Camera",
+                        "uri=${event.outputResults.outputUri}"
+                    )
+
+                    onSaved(
+                        event.outputResults.outputUri.toString()
+                    )
+                }
+            }
 
         isRecording = true
+        onRecordingStateChanged(true)
+    }
+    fun stopRecording() {
+        recording?.stop()
+        recording = null
+        isRecording = false
+
+        onRecordingStateChanged(false)
     }
 
     LaunchedEffect(remoteStartRecording) {
 
+        Log.d(
+            "Camera",
+            "LaunchedEffect fired = $remoteStartRecording"
+        )
         if (remoteStartRecording) {
 
             Log.d(
@@ -320,11 +451,21 @@ fun CameraScreen(
             onRemoteStartConsumed()
         }
     }
-    fun stopRecording() {
-        recording?.stop()
-        recording = null
-        isRecording = false
+    LaunchedEffect(remoteStopRecording) {
+
+        if (remoteStopRecording) {
+
+            Log.d(
+                "Camera",
+                "원격 녹화 종료"
+            )
+
+            stopRecording()
+
+            onRemoteStopConsumed()
+        }
     }
+
     LaunchedEffect(remoteStopRecording) {
 
         if (remoteStopRecording) {
