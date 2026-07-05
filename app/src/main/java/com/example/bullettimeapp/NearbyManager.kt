@@ -1,19 +1,29 @@
 package com.example.bullettimeapp
 
 import android.content.Context
-import com.google.android.gms.nearby.Nearby
-import com.google.android.gms.nearby.connection.*
-
-import android.util.Log
-import java.io.File
 import android.net.Uri
+import android.util.Log
+import com.google.android.gms.nearby.Nearby
+import com.google.android.gms.nearby.connection.AdvertisingOptions
+import com.google.android.gms.nearby.connection.ConnectionInfo
+import com.google.android.gms.nearby.connection.ConnectionLifecycleCallback
+import com.google.android.gms.nearby.connection.ConnectionResolution
+import com.google.android.gms.nearby.connection.DiscoveredEndpointInfo
+import com.google.android.gms.nearby.connection.DiscoveryOptions
+import com.google.android.gms.nearby.connection.EndpointDiscoveryCallback
+import com.google.android.gms.nearby.connection.Payload
+import com.google.android.gms.nearby.connection.PayloadCallback
+import com.google.android.gms.nearby.connection.PayloadTransferUpdate
+import com.google.android.gms.nearby.connection.Strategy
+import java.io.File
 import java.io.FileInputStream
 
 class NearbyManager(
     private val context: Context,
     private val onMessageReceived: (String) -> Unit,
     private val onConnectionChanged: (Int) -> Unit,
-    private val onFileReceived: (String) -> Unit
+    private val onFileReceived: (String) -> Unit,
+    private val onTransferProgress: (Int) -> Unit
 ){
     private var connectionCount = 0
     private val connectedEndpoints =
@@ -287,9 +297,18 @@ class NearbyManager(
                 update: PayloadTransferUpdate
             ) {
 
+                val progress =
+                    if (update.totalBytes > 0)
+                        ((update.bytesTransferred * 100)
+                                / update.totalBytes).toInt()
+                    else
+                        0
+
+                onTransferProgress(progress)
+
                 Log.d(
                     "Nearby",
-                    "전송상태 id=${update.payloadId} status=${update.status} bytes=${update.bytesTransferred}/${update.totalBytes}"
+                    "전송 진행률: $progress%"
                 )
 
                 if (
